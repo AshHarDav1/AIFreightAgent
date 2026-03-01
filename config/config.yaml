@@ -1,0 +1,60 @@
+# AI Freight Agent Configuration
+
+# Scraping Configuration
+scraping:
+  interval_minutes: 30
+  rate_limit_delay_seconds: 5
+  max_retries: 3
+  timeout_seconds: 30
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# Load Filtering Criteria
+load_filtering:
+  min_rate: 0  # Minimum rate in dollars
+  max_rate: null  # Maximum rate (null = no limit)
+  equipment_types: []  # Empty = all types
+  exclude_states: []  # States to exclude
+  min_miles: 0
+  max_miles: null
+
+# AI Configuration
+ai:
+  model: "gpt-4"  # or "gpt-3.5-turbo", "claude-3-opus", etc.
+  temperature: 0.7
+  max_tokens: 500
+  message_tone: "professional"  # professional, friendly, assertive
+
+# Email Configuration
+email:
+  subject_template: "Load Inquiry - {origin} to {destination}"
+  send_delay_seconds: 10  # Delay between emails
+  max_emails_per_hour: 20
+
+# Message Templates
+message_templates:
+  greeting: "Hello {broker_name},"
+  introduction: "I represent {carrier_name}, a reliable carrier with {years_experience} years of experience."
+  load_interest: "I'm interested in the load from {origin} to {destination} ({miles} miles)."
+  capabilities: "We have {equipment_type} available and can accommodate your timeline."
+  closing: "Please let me know if this load is still available and if we can discuss the details."
+  signature: "Best regards,\n{agent_name}\n{carrier_name}\n{contact_info}"
+
+# Carrier Information
+carrier:
+  name: "Your Carrier Company"
+  years_experience: 10
+  agent_name: "AI Agent"
+  contact_info: "Email: contact@carrier.com | Phone: (555) 123-4567"
+  equipment_types: ["Dry Van", "Refrigerated", "Flatbed"]
+
+# Database
+database:
+  echo: false  # SQLAlchemy echo (for debugging)
+  pool_size: 5
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "logs/freight_agent.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
