@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # LLM API Keys
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    groq_api_key: str = ""
     
     # Database
     database_url: str = "sqlite:///./freight_agent.db"

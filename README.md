@@ -48,6 +48,52 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architecture and implement
    - LLM API keys (OpenAI, Anthropic, etc.)
    - Database connection
 
+## Quick Start
+
+### 1. Set Up Environment
+
+Create a `.env` file in the project root:
+
+```bash
+# Required for Telegram Bot
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+
+# Required for AI Message Generation
+OPENAI_API_KEY=sk-your_openai_api_key
+
+# Optional - for email sending
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your_email@gmail.com
+SMTP_PASSWORD=your_app_password
+EMAIL_FROM=your_email@gmail.com
+```
+
+### 2. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Run the Application
+
+```bash
+python main.py
+```
+
+### 4. Test the Flow
+
+**Option A: Automated Test**
+```bash
+python test_flow.py
+```
+
+**Option B: Telegram Bot Commands**
+- Open Telegram and find your bot
+- Use commands: `/start`, `/test_scrape`, `/loads`, `/generate_message <load_id>`, `/send_message <load_id>`
+
+See [TESTING_GUIDE.md](./TESTING_GUIDE.md) for detailed testing instructions.
+
 ## Usage
 
 ```bash
