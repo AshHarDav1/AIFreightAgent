@@ -193,6 +193,83 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error in test_scrape: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def octo_profiles_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /octo_profiles - list available Octo profiles by name."""
+        self._log_command_start("/octo_profiles", update, context)
+
+        from src.octo.client import OctoClient
+
+        client = OctoClient()
+        profiles = await client.fetch_profiles()
+        if not profiles:
+            await update.message.reply_text(
+                "❌ Could not load Octo profiles. Make sure OCTO_API_TOKEN is set."
+            )
+            return
+
+        lines = ["<b>Available Octo profiles</b>:"]
+        for key, profile in profiles.items():
+            tags = ", ".join(profile.tags) if profile.tags else "-"
+            lines.append(f"• <b>{profile.title}</b> (tags: {tags})")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        self._log_command_success("/octo_profiles", update, extra=f"count={len(profiles)}")
+
+    async def scrape_dat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scrape_dat <profile_name> - real DAT scrape via chosen Octo profile."""
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Usage: /scrape_dat <profile_name>\n"
+                "Tip: use /octo_profiles to see available profiles."
+            )
+            return
+
+        profile_name = " ".join(context.args).strip()
+        self._log_command_start("/scrape_dat", update, context)
+
+        from src.octo.client import OctoClient
+        from src.scraper.dat_playwright_scraper import DATPlaywrightScraper
+
+        client = OctoClient()
+        profiles = await client.fetch_profiles(search=profile_name)
+        if not profiles:
+            await update.message.reply_text(
+                f"❌ No Octo profiles found matching '{profile_name}'. Try /octo_profiles."
+            )
+            return
+
+        # Simple matching: exact (case-insensitive) title if possible, otherwise first result.
+        key = profile_name.lower()
+        profile = profiles.get(key)
+        if not profile:
+            # fall back to first profile in the dict
+            profile = next(iter(profiles.values()))
+
+        await update.message.reply_text(
+            f"🔍 Starting DAT scrape via Octo profile: <b>{profile.title}</b>",
+            parse_mode="HTML",
+        )
+
+        try:
+            scraper = DATPlaywrightScraper(profile_uuid=profile.uuid)
+            created = await scraper.scrape_and_store()
+
+            if created > 0:
+                await update.message.reply_text(
+                    f"✅ Scrape complete. {created} new loads stored. Use /loads to view them."
+                )
+            else:
+                await update.message.reply_text(
+                    "⚠️ Scrape finished but no new loads were stored.\n"
+                    "Check logs, selectors, and your Octo/DAT page."
+                )
+            self._log_command_success(
+                "/scrape_dat", update, extra=f"profile={profile.title}, created={created}"
+            )
+        except Exception as e:
+            logger.error(f"Error in scrape_dat: {e}")
+            await update.message.reply_text(f"❌ Error during DAT scrape: {str(e)}")
     
     async def generate_message_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /generate_message <load_id> command"""
@@ -284,6 +361,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("loads", self.loads_command))
         self.application.add_handler(CommandHandler("test_scrape", self.test_scrape_command))
+        self.application.add_handler(CommandHandler("octo_profiles", self.octo_profiles_command))
+        self.application.add_handler(CommandHandler("scrape_dat", self.scrape_dat_command))
         self.application.add_handler(CommandHandler("generate_message", self.generate_message_command))
         self.application.add_handler(CommandHandler("send_message", self.send_message_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))

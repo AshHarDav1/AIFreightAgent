@@ -1,0 +1,38 @@
+version: "3.3"
+
+services:
+  db:
+    image: postgres:16
+    container_name: freight_db
+    environment:
+      POSTGRES_USER: freight_user
+      POSTGRES_PASSWORD: freight_pass
+      POSTGRES_DB: freight_agent
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  app:
+    build: .
+    container_name: freight_app
+    depends_on:
+      - db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Load most config from your local .env (but .env itself is NOT built into the image)
+    env_file:
+      - .env
+    # Override DB host to point at the db container
+    environment:
+      DATABASE_URL: postgresql://freight_user:freight_pass@db:5432/freight_agent
+    # If you need to talk to Octo Browser running on the host at localhost:PORT,
+    # you can switch this to `network_mode: "host"` (see notes in README).
+    # network_mode: "host"
+    # No ports to expose: Telegram bot connects OUT to Telegram servers.
+    # Add ports here if you later add an HTTP API.
+    command: ["python", "main.py"]
+
+volumes:
+  db_data:
+

@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Scraping Settings
     scrape_interval_minutes: int = 30
     rate_limit_delay_seconds: int = 5
+
+    # Octo Browser / DAT integration
+    # Cloud API token (for listing/searching profiles)
+    octo_api_token: str = os.getenv("OCTO_API_TOKEN", "")
+    # Local desktop API base URL (Octo client on same host)
+    # Docker containers should use host.docker.internal here.
+    octo_local_api_url: str = os.getenv("OCTO_LOCAL_API_URL", "http://host.docker.internal:58888")
     
     # Application Settings
     log_level: str = "INFO"
