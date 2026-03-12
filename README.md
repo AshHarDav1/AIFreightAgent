@@ -100,6 +100,76 @@ See [TESTING_GUIDE.md](./TESTING_GUIDE.md) for detailed testing instructions.
 python main.py
 ```
 
+## Octo Bridge (when app runs in Docker)
+
+If the app runs in Docker but Octo Browser runs on the host (bound to `127.0.0.1:58888`), the container cannot reach it directly. Run a small TCP bridge **on the host**:
+
+1. **Install socat** (once):
+   ```bash
+   # Debian/Ubuntu
+   sudo apt install socat
+   # macOS
+   brew install socat
+   ```
+
+2. **Start the bridge** (on the Octo host, keep it running):
+   ```bash
+   ./scripts/octo-bridge.sh
+   ```
+   Or manually: `socat TCP-LISTEN:58889,fork,reuseaddr TCP:127.0.0.1:58888`
+
+3. **In `.env`** (for the Dockerized app):
+   ```env
+   OCTO_LOCAL_API_URL=http://host.docker.internal:58889
+   ```
+
+4. **Firewall (secure)** — The container reaches the bridge on the host’s port (e.g. 58889). This port is listened by socat which redirects traffic through the bridge to `127.0.0.1:58888` where Octo is listening. Many hosts block this by default. **Do not** open the port to the whole internet (`ufw allow 58889/tcp`). Allow it only from the Docker network subnet so only your containers can connect:
+
+   - Find the Docker subnet (replace `aifreightagent_default` if your project name differs):
+     ```bash
+     docker network ls
+     docker network inspect aifreightagent_default | grep -A5 '"IPAM"'
+     ```
+     Or for the default bridge: `docker network inspect bridge | grep -A5 '"IPAM"'`. Note the `Subnet` (e.g. `172.18.0.0/16`).
+
+   - Allow port 58889 only from that subnet (replace `172.18.0.0/16` with your subnet):
+     ```bash
+     sudo ufw allow from 172.18.0.0/16 to any port 58889 proto tcp
+     sudo ufw reload
+     ```
+   Container IPs change on each rebuild; the subnet stays the same, so this remains valid.
+
+Optional env vars when running the script: `BRIDGE_PORT=58889` (default), `OCTO_PORT=58888` (Octo’s port).
+
+### Octo CDP Bridge Manager (for Docker)
+
+Octo’s automation API returns a CDP WebSocket like `ws://127.0.0.1:PORT/devtools/browser/...` where `PORT` changes per profile start. When the app runs in Docker, it cannot connect directly to `127.0.0.1:PORT` on the host. The CDP bridge manager creates a small TCP proxy per CDP port.
+
+1. **Run the manager** on the Octo host (Linux/Windows/macOS):
+
+   ```bash
+   python scripts/octo-cdp-bridge-manager.py
+   ```
+
+   This starts an HTTP server on `0.0.0.0:58890` and uses a bridge port range `60000–60100` for CDP tunnels.
+
+2. **In `.env`** (for the Dockerized app):
+
+   ```env
+   OCTO_CDP_BRIDGE_URL=http://host.docker.internal:58890
+   ```
+
+3. **Firewall (secure)** — Similar to the main Octo bridge, allow access only from the Docker subnet:
+
+   ```bash
+   # Example; replace 172.18.0.0/16 with your Docker subnet
+   sudo ufw allow from 172.18.0.0/16 to any port 58890 proto tcp
+   sudo ufw allow from 172.18.0.0/16 to any port 60000:60100 proto tcp
+   sudo ufw reload
+   ```
+
+   This allows containers on the Docker network to reach the CDP manager and its bridge ports, while keeping them closed to the rest of the world.
+
 ## Configuration
 
 See `config/config.yaml` and `.env` for configuration options.

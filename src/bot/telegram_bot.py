@@ -55,6 +55,11 @@ class TelegramBot:
             "/test_scrape - Simulate scraping test data\n"
             "/generate_message &lt;load_id&gt; - Generate message for a load\n"
             "/send_message &lt;load_id&gt; - Send message to broker\n"
+            "/octo_profiles - List available Octo profiles\n"
+            "/scrape_dat_open &lt;profile&gt; - Open browser for manual filters\n"
+            "/scrape_dat_run - Scrape visible loads (after SEARCH)\n"
+            "/scrape_dat_close - Close browser session\n"
+            "/scrape_dat_debug - Save page HTML for selector debugging\n"
             "/help - Show help message"
         )
         await update.message.reply_text(welcome_message, parse_mode='HTML')
@@ -73,6 +78,11 @@ class TelegramBot:
             "/test_scrape - Simulate scraping and add test loads\n"
             "/generate_message &lt;load_id&gt; - Generate AI message for a load\n"
             "/send_message &lt;load_id&gt; - Send email to broker for a load\n"
+            "/octo_profiles - List available Octo profiles\n"
+            "/scrape_dat_open &lt;profile&gt; - Open Octo browser for DAT (fill filters, then SEARCH)\n"
+            "/scrape_dat_run - Scrape visible loads from open session\n"
+            "/scrape_dat_close - Close the scrape session\n"
+            "/scrape_dat_debug - Save page HTML to debug/ for DOM inspection\n"
             "/help - Show this help"
         )
         await update.message.reply_text(help_text, parse_mode='HTML')
@@ -208,28 +218,33 @@ class TelegramBot:
             )
             return
 
+        # Log mapping title -> uuid to application logs
+        mapping = {profile.title: profile.uuid for profile in profiles.values()}
+        logger.info(f"Octo profiles mapping (title -> uuid): {mapping}")
+
         lines = ["<b>Available Octo profiles</b>:"]
         for key, profile in profiles.items():
             tags = ", ".join(profile.tags) if profile.tags else "-"
-            lines.append(f"• <b>{profile.title}</b> (tags: {tags})")
+            # Show UUID so you can see the mapping explicitly
+            lines.append(f"• <b>{profile.title}</b>\n  uuid: <code>{profile.uuid}</code>\n  tags: {tags}")
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         self._log_command_success("/octo_profiles", update, extra=f"count={len(profiles)}")
 
-    async def scrape_dat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /scrape_dat <profile_name> - real DAT scrape via chosen Octo profile."""
+    async def scrape_dat_open_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scrape_dat_open <profile_name> - open Octo browser for manual filters."""
         if not context.args:
             await update.message.reply_text(
-                "❌ Usage: /scrape_dat <profile_name>\n"
+                "❌ Usage: /scrape_dat_open <profile_name>\n"
                 "Tip: use /octo_profiles to see available profiles."
             )
             return
 
         profile_name = " ".join(context.args).strip()
-        self._log_command_start("/scrape_dat", update, context)
+        self._log_command_start("/scrape_dat_open", update, context)
 
         from src.octo.client import OctoClient
-        from src.scraper.dat_playwright_scraper import DATPlaywrightScraper
+        from src.scraper.dat_playwright_scraper import open_for_scraping
 
         client = OctoClient()
         profiles = await client.fetch_profiles(search=profile_name)
@@ -239,37 +254,97 @@ class TelegramBot:
             )
             return
 
-        # Simple matching: exact (case-insensitive) title if possible, otherwise first result.
         key = profile_name.lower()
-        profile = profiles.get(key)
-        if not profile:
-            # fall back to first profile in the dict
-            profile = next(iter(profiles.values()))
+        profile = profiles.get(key) or next(iter(profiles.values()))
 
         await update.message.reply_text(
-            f"🔍 Starting DAT scrape via Octo profile: <b>{profile.title}</b>",
+            f"🔓 Opening browser for profile: <b>{profile.title}</b>...",
             parse_mode="HTML",
         )
 
         try:
-            scraper = DATPlaywrightScraper(profile_uuid=profile.uuid)
-            created = await scraper.scrape_and_store()
+            ok = await open_for_scraping(profile.uuid)
+            if ok:
+                await update.message.reply_text(
+                    "✅ Browser is ready.\n\n"
+                    "👉 <b>Fill filters</b> (Origin, Destination, Equipment, Date, etc.) "
+                    "and click <b>SEARCH</b>.\n\n"
+                    "When loads are visible, run <b>/scrape_dat_run</b> to scrape them.",
+                    parse_mode="HTML",
+                )
+                self._log_command_success("/scrape_dat_open", update, extra=f"profile={profile.title}")
+            else:
+                await update.message.reply_text("❌ Failed to open browser. Check logs.")
+        except Exception as e:
+            logger.error(f"Error in scrape_dat_open: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
 
+    async def scrape_dat_run_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scrape_dat_run - scrape visible loads from the open session."""
+        self._log_command_start("/scrape_dat_run", update, context)
+
+        from src.scraper.dat_playwright_scraper import is_scrape_session_open, scrape_and_store_from_open
+
+        if not is_scrape_session_open():
+            await update.message.reply_text(
+                "❌ No browser session open.\n"
+                "Run <b>/scrape_dat_open</b> first, fill filters, click SEARCH, then run this again.",
+                parse_mode="HTML",
+            )
+            return
+
+        await update.message.reply_text("🔍 Scraping visible loads...")
+
+        try:
+            created = await scrape_and_store_from_open()
             if created > 0:
                 await update.message.reply_text(
-                    f"✅ Scrape complete. {created} new loads stored. Use /loads to view them."
+                    f"✅ Scraped {created} new loads. Use /loads to view them."
                 )
             else:
                 await update.message.reply_text(
-                    "⚠️ Scrape finished but no new loads were stored.\n"
-                    "Check logs, selectors, and your Octo/DAT page."
+                    "⚠️ No new loads stored. Make sure you clicked SEARCH and loads are visible."
                 )
-            self._log_command_success(
-                "/scrape_dat", update, extra=f"profile={profile.title}, created={created}"
-            )
+            self._log_command_success("/scrape_dat_run", update, extra=f"created={created}")
         except Exception as e:
-            logger.error(f"Error in scrape_dat: {e}")
-            await update.message.reply_text(f"❌ Error during DAT scrape: {str(e)}")
+            logger.error(f"Error in scrape_dat_run: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def scrape_dat_close_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scrape_dat_close - close the open scrape session."""
+        self._log_command_start("/scrape_dat_close", update, context)
+
+        from src.scraper.dat_playwright_scraper import close_scrape_session
+
+        await close_scrape_session()
+        await update.message.reply_text("✅ Scrape session closed.")
+        self._log_command_success("/scrape_dat_close", update)
+
+    async def scrape_dat_debug_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /scrape_dat_debug - save page HTML for DOM inspection."""
+        self._log_command_start("/scrape_dat_debug", update, context)
+
+        from src.scraper.dat_playwright_scraper import is_scrape_session_open, dump_page_html_for_debug
+
+        if not is_scrape_session_open():
+            await update.message.reply_text(
+                "❌ No browser session open.\n"
+                "Run /scrape_dat_open first, fill filters, click SEARCH so loads are visible, "
+                "then run /scrape_dat_debug."
+            )
+            return
+
+        path = await dump_page_html_for_debug()
+        if path:
+            await update.message.reply_text(
+                f"✅ Page HTML saved to:\n<code>{path}</code>\n\n"
+                "In Docker: the file is in <code>./debug/dat_page_debug.html</code> "
+                "(project folder). Share it so we can update the load selectors.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text("❌ Failed to save page HTML. Check logs.")
+        self._log_command_success("/scrape_dat_debug", update)
     
     async def generate_message_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /generate_message <load_id> command"""
@@ -362,7 +437,10 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("loads", self.loads_command))
         self.application.add_handler(CommandHandler("test_scrape", self.test_scrape_command))
         self.application.add_handler(CommandHandler("octo_profiles", self.octo_profiles_command))
-        self.application.add_handler(CommandHandler("scrape_dat", self.scrape_dat_command))
+        self.application.add_handler(CommandHandler("scrape_dat_open", self.scrape_dat_open_command))
+        self.application.add_handler(CommandHandler("scrape_dat_run", self.scrape_dat_run_command))
+        self.application.add_handler(CommandHandler("scrape_dat_close", self.scrape_dat_close_command))
+        self.application.add_handler(CommandHandler("scrape_dat_debug", self.scrape_dat_debug_command))
         self.application.add_handler(CommandHandler("generate_message", self.generate_message_command))
         self.application.add_handler(CommandHandler("send_message", self.send_message_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))

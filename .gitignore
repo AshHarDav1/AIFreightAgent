@@ -54,3 +54,4 @@ Thumbs.db
 config/local.yaml
 data/
 scraped_data/
+debug/

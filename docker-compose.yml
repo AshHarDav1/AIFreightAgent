@@ -18,6 +18,8 @@ services:
     container_name: freight_app
     depends_on:
       - db
+    volumes:
+      - ./debug:/app/debug
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Load most config from your local .env (but .env itself is NOT built into the image)

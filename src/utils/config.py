@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # Local desktop API base URL (Octo client on same host)
     # Docker containers should use host.docker.internal here.
     octo_local_api_url: str = os.getenv("OCTO_LOCAL_API_URL", "http://host.docker.internal:58888")
+    octo_cloud_base_url: str = os.getenv("OCTO_CLOUD_BASE_URL", "https://app.octobrowser.net/api/v2/automation")
+    # Optional CDP bridge manager URL (when app runs in Docker and needs CDP tunnel)
+    # Example: http://host.docker.internal:58890
+    octo_cdp_bridge_url: str = os.getenv("OCTO_CDP_BRIDGE_URL", "")
     
     # Application Settings
     log_level: str = "INFO"
