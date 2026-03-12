@@ -16,12 +16,9 @@ An automated AI agent that scrapes DAT (freight load board), extracts load detai
 ### Core Technologies
 - **Language**: Python 3.10+
 - **Web Scraping**: 
-  - Selenium/Playwright for dynamic content
-  - BeautifulSoup4 for HTML parsing
-  - Scrapy (optional) for advanced scraping
+  - Playwright attached to an Octo Browser profile (via CDP bridge)
 - **AI/LLM Integration**:
-  - OpenAI API / Anthropic Claude / Local LLM (Ollama)
-  - LangChain for orchestration
+  - OpenAI API (direct client)
 - **Email Handling**:
   - SMTP for sending emails
   - IMAP for receiving/parsing responses

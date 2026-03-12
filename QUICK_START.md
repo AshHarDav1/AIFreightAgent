@@ -74,6 +74,94 @@ python -c "from src.utils.config import config; print('Config loaded:', config.c
 python main.py
 ```
 
+## Docker + Octo Bridge Setup (DAT Scraping)
+
+Use this when you run the app in Docker but Octo Browser runs on the host.
+
+### 1. Requirements
+- Docker + docker-compose
+- Octo Browser running on the host (local API on `127.0.0.1:58888`)
+- Optional but recommended: `ufw` firewall enabled
+
+### 2. Start the Octo HTTP bridge (host)
+On the machine where Octo is running:
+
+```bash
+cd /home/ashot/Documents/AIFreightAgent
+chmod +x scripts/octo-bridge.sh
+./scripts/octo-bridge.sh
+```
+
+This exposes `0.0.0.0:58889 -> 127.0.0.1:58888` using `socat`. Keep this terminal running.
+
+### 3. Start the Octo CDP bridge manager (host)
+
+In a second terminal on the same host:
+
+```bash
+cd /home/ashot/Documents/AIFreightAgent
+python scripts/octo-cdp-bridge-manager.py
+```
+
+This starts an HTTP server on `0.0.0.0:58890` and will open CDP bridges on ports `60000–60100`.
+
+### 4. Find your Docker subnet
+
+```bash
+docker network ls
+docker network inspect aifreightagent_default | grep -A5 '"IPAM"'
+# or, for the default bridge:
+docker network inspect bridge | grep -A5 '"IPAM"'
+```
+
+Note the `Subnet` value (for example `172.18.0.0/16`).
+
+### 5. Check and open firewall ports (host)
+
+Check current rules:
+
+```bash
+sudo ufw status numbered
+```
+
+If needed, allow the Docker subnet to reach just the bridge ports (replace `172.18.0.0/16` with your subnet):
+
+```bash
+sudo ufw allow from 172.18.0.0/16 to any port 58889 proto tcp
+sudo ufw allow from 172.18.0.0/16 to any port 58890 proto tcp
+sudo ufw allow from 172.18.0.0/16 to any port 60000:60100 proto tcp
+sudo ufw reload
+```
+
+Do **not** open these ports to the whole internet.
+
+### 6. Configure `.env` for Docker
+
+In your project `.env`:
+
+```env
+OCTO_LOCAL_API_URL=http://host.docker.internal:58889
+OCTO_CDP_BRIDGE_URL=http://host.docker.internal:58890
+```
+
+### 7. Run the app in Docker
+
+From the project root:
+
+```bash
+docker-compose up --build
+```
+
+### 8. Scrape DAT via Telegram bot
+
+From Telegram:
+
+1. `/octo_profiles` – list Octo profiles and pick a name.
+2. `/scrape_dat_open <profile_name>` – starts the profile and attaches Playwright.
+3. In the Octo browser window, go to **Search Loads**, set filters, and click **SEARCH**.
+4. `/scrape_dat_run` – scrapes the visible loads into the database.
+5. `/scrape_dat_close` – closes the browser session.
+
 ## Development Workflow
 
 ### Testing Individual Components

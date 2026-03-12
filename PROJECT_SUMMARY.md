@@ -32,10 +32,10 @@ I've set up a complete project structure and foundation for your AI Freight Agen
    - Log rotation support
 
 5. **Project Documentation**
-   - `ARCHITECTURE.md` - System architecture and design
+   - `ARCHITECTURE.md` - System architecture and design (updated to reflect Playwright + Octo bridges)
    - `IMPLEMENTATION_PLAN.md` - Step-by-step implementation guide
-   - `QUICK_START.md` - Setup and getting started guide
-   - `README.md` - Project overview
+   - `QUICK_START.md` - Setup and getting started guide (includes Docker + Octo bridge sequence)
+   - `README.md` - Project overview and detailed Octo/Docker bridge setup (ports, firewall, scripts)
 
 6. **Dependencies**
    - All required packages listed in `requirements.txt`

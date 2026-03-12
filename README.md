@@ -100,7 +100,25 @@ See [TESTING_GUIDE.md](./TESTING_GUIDE.md) for detailed testing instructions.
 python main.py
 ```
 
-## Octo Bridge (when app runs in Docker)
+## Octo + Docker Bridge Overview
+
+When the app runs in Docker but Octo Browser runs on the host, there are **two bridges**:
+
+- **HTTP API bridge** (`scripts/octo-bridge.sh`): lets the container talk to Octo’s local HTTP API.
+- **CDP bridge manager** (`scripts/octo-cdp-bridge-manager.py`): exposes Octo’s dynamic CDP WebSocket ports to the container.
+
+High‑level sequence:
+
+1. On the host, run the **HTTP bridge** script.
+2. On the host, run the **CDP bridge manager**.
+3. Configure `.env` with `OCTO_LOCAL_API_URL` and `OCTO_CDP_BRIDGE_URL`.
+4. Open the required ports in `ufw` **only for the Docker subnet**.
+5. Start the app with `docker-compose up`.
+6. Use Telegram commands `/octo_profiles`, `/scrape_dat_open`, `/scrape_dat_run`, `/scrape_dat_close`.
+
+Details below.
+
+### Octo HTTP Bridge (when app runs in Docker)
 
 If the app runs in Docker but Octo Browser runs on the host (bound to `127.0.0.1:58888`), the container cannot reach it directly. Run a small TCP bridge **on the host**:
 
@@ -118,7 +136,7 @@ If the app runs in Docker but Octo Browser runs on the host (bound to `127.0.0.1
    ```
    Or manually: `socat TCP-LISTEN:58889,fork,reuseaddr TCP:127.0.0.1:58888`
 
-3. **In `.env`** (for the Dockerized app):
+3. **In `.env`** (for the Dockerized app/container):
    ```env
    OCTO_LOCAL_API_URL=http://host.docker.internal:58889
    ```
@@ -153,7 +171,7 @@ Octo’s automation API returns a CDP WebSocket like `ws://127.0.0.1:PORT/devtoo
 
    This starts an HTTP server on `0.0.0.0:58890` and uses a bridge port range `60000–60100` for CDP tunnels.
 
-2. **In `.env`** (for the Dockerized app):
+2. **In `.env`** (for the Dockerized app/container):
 
    ```env
    OCTO_CDP_BRIDGE_URL=http://host.docker.internal:58890
