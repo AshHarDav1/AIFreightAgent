@@ -56,8 +56,13 @@ class OctoClient:
         url = f"{self.cloud_base_url}/profiles"
         logger.info(f"Requesting Octo profiles from {url} (search={search!r})")
 
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(url, headers=headers, params=params)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url, headers=headers, params=params)
+        except httpx.RequestError as e:
+            # Network/DNS/connect errors should not crash the bot.
+            logger.error(f"Octo fetch_profiles request failed: {e!r}")
+            return {}
 
         if resp.status_code != 200:
             logger.error(f"Failed to fetch Octo profiles: {resp.status_code} {resp.text}")
@@ -91,8 +96,34 @@ class OctoClient:
 
         logger.info(f"Starting Octo profile {profile_uuid} via {url}")
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=payload)
+        # Bridge/network issues can cause transient connect timeouts.
+        # Retry a few times before giving up.
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(url, json=payload)
+                break
+            except (httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                last_error = e
+                logger.warning(
+                    f"Octo start_profile_for_playwright timeout (attempt {attempt}/3): {e!r}"
+                )
+                await asyncio.sleep(1.5 * attempt)
+            except httpx.RequestError as e:
+                last_error = e
+                logger.error(
+                    f"Octo start_profile_for_playwright request failed (attempt {attempt}/3): {e!r}"
+                )
+                break
+        else:
+            resp = None
+
+        if resp is None:
+            logger.error(
+                f"Octo did not return ws_endpoint (last_error={last_error!r})"
+            )
+            return None
 
         if not resp.is_success:
             try:

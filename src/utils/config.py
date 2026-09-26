@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     
     # Telegram Bot
     telegram_bot_token: str = ""
+    telegram_notify_chat_id: str = ""
     
     # Scraping Settings
     scrape_interval_minutes: int = 30
@@ -108,6 +109,10 @@ class ConfigManager:
     def get_message_templates(self) -> Dict[str, str]:
         """Get message templates"""
         return self.config.get('message_templates', {})
+
+    def get_load_filtering_config(self) -> Dict[str, Any]:
+        """Get load filtering criteria"""
+        return self.config.get('load_filtering', {})
 
 
 # Global config instance

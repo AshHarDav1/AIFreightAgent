@@ -16,6 +16,8 @@ load_filtering:
   exclude_states: []  # States to exclude
   min_miles: 0
   max_miles: null
+  commodity_include_keywords: []  # Empty = allow any commodity
+  commodity_exclude_keywords: []  # Reject commodity if any keyword matches
 
 # AI Configuration
 ai:

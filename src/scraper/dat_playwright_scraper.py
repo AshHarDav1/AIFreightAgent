@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dateutil import parser as date_parser
 from playwright.async_api import async_playwright, Page
 
 from src.utils.logger import logger
@@ -510,6 +511,14 @@ class DATPlaywrightScraper:
                     rate_text = (await rate_el2.inner_text() or "").strip()
             equip_text = await get_text("[data-test='load-eq-cell']")
             pickup_text = await get_text("[data-test='load-pick-up-cell']")
+            # DAT One may expose delivery via a dedicated data-test attribute; try common variants.
+            delivery_text = await get_text("[data-test='load-delivery-cell']")
+            if not delivery_text:
+                delivery_text = await get_text("[data-test='load-deliver-cell']")
+            if not delivery_text:
+                delivery_text = await get_text("[data-test='load-drop-off-cell']")
+            if not delivery_text:
+                delivery_text = await get_text(".route-dh-container-lg .delivery")
             weight_text = await get_text("[data-test='load-weight-cell']")
             broker_name = await get_text("[data-test='load-company-cell']")
 
@@ -555,7 +564,7 @@ class DATPlaywrightScraper:
                     rate=rate,
                     equipment_type=equip_text or None,
                     pickup_date=pickup_text or None,
-                    delivery_date=None,
+                    delivery_date=delivery_text or None,
                     weight=weight,
                     commodity=None,
                     broker_name=broker_name or None,
@@ -604,7 +613,26 @@ class DATPlaywrightScraper:
     def _safe_parse_datetime(text: Optional[str]) -> Optional[datetime]:
         if not text:
             return None
-        # For now, store dates as strings in raw_data and leave parsed fields optional.
-        # You can implement custom parsing here if DAT exposes a stable date format.
-        return None
+        cleaned = " ".join(str(text).replace("\n", " ").split())
+        # Use fuzzy parsing to tolerate time ranges / extra words.
+        # We only need the date portion for messaging.
+        try:
+            dt = date_parser.parse(cleaned, fuzzy=True)
+            return dt
+        except Exception:
+            # Best-effort fallback: try shorter candidates that often contain the date first.
+            candidates = [
+                cleaned.split("(")[0].strip(),
+                cleaned.split("-")[0].strip(),
+                cleaned[:30],
+                cleaned[:60],
+            ]
+            for cand in candidates:
+                if not cand:
+                    continue
+                try:
+                    return date_parser.parse(cand, fuzzy=True)
+                except Exception:
+                    continue
+            return None
 

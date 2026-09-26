@@ -42,6 +42,7 @@ class MessageGenerator:
                 
                 # Prepare load details
                 load_details = {
+                    'load_id': load.load_id,
                     'origin': load.origin,
                     'destination': load.destination,
                     'miles': load.miles,
@@ -73,31 +74,43 @@ class MessageGenerator:
     
     def _generate_template_message(self, load_details: Dict[str, Any], broker: Optional[Broker]) -> str:
         """Generate message using templates (fallback)"""
-        greeting = self.templates.get('greeting', 'Hello,').format(
-            broker_name=broker.name if broker else 'Broker'
+        greeting = self.templates.get("greeting", "Hello {broker_name},").format(
+            broker_name=broker.name if broker else "Broker"
         )
-        
-        introduction = self.templates.get('introduction', '').format(
-            carrier_name=self.carrier_info.get('name', 'Carrier Company'),
-            years_experience=self.carrier_info.get('years_experience', '10')
+
+        # "First message" fallback: concise and explicitly includes rate + exact commodity.
+        rate = load_details.get("rate")
+        rate_str = f"${rate}" if rate is not None else "please confirm"
+        commodity = load_details.get("commodity") or "N/A"
+        if commodity == "N/A":
+            commodity = "please confirm"
+        pickup_date = load_details.get("pickup_date") or "N/A"
+        equipment_type = load_details.get("equipment_type") or "N/A"
+
+        load_line = (
+            "DAT load:\n"
+            f"Route: {load_details.get('origin', 'N/A')} -> {load_details.get('destination', 'N/A')}\n"
+            f"EQUIPMENT: {equipment_type}\n"
+            f"PU: {pickup_date}\n"
+            f"RATE: {rate_str}\n"
+            f"COMMODITY: {commodity}"
         )
-        
-        load_interest = self.templates.get('load_interest', '').format(
-            origin=load_details.get('origin', 'N/A'),
-            destination=load_details.get('destination', 'N/A'),
-            miles=load_details.get('miles', 'N/A')
+
+        closing = self.templates.get(
+            "closing",
+            "Please confirm availability plus the RATE and COMMODITY above.",
         )
-        
-        capabilities = self.templates.get('capabilities', '').format(
-            equipment_type=load_details.get('equipment_type', 'N/A')
+        signature = self.templates.get("signature", "").format(
+            agent_name=self.carrier_info.get("agent_name", "AI Agent"),
+            carrier_name=self.carrier_info.get("name", "Carrier Company"),
+            contact_info=self.carrier_info.get("contact_info", ""),
         )
-        
-        closing = self.templates.get('closing', '')
-        signature = self.templates.get('signature', '').format(
-            agent_name=self.carrier_info.get('agent_name', 'AI Agent'),
-            carrier_name=self.carrier_info.get('name', 'Carrier Company'),
-            contact_info=self.carrier_info.get('contact_info', '')
-        )
-        
-        message_parts = [greeting, introduction, load_interest, capabilities, closing, signature]
-        return '\n\n'.join(filter(None, message_parts))
+
+        # If signature template is empty/misconfigured, still provide a usable end.
+        if not signature.strip():
+            signature = (
+                f"Best regards,\n{self.carrier_info.get('agent_name', 'AI Agent')}\n"
+                f"{self.carrier_info.get('name', 'Carrier Company')}"
+            )
+
+        return "\n\n".join([greeting, load_line, closing, signature])

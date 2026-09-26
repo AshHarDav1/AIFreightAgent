@@ -1,5 +1,6 @@
 """Telegram bot handler"""
 import asyncio
+import os
 from typing import Optional
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -52,9 +53,12 @@ class TelegramBot:
             "/status - Show system status\n"
             "/stats - Show statistics\n"
             "/loads - List recent loads\n"
+            "/possible_loads - List loads with rate + commodity\n"
+            "/auto_cycle [max_scrape] [max_emails] [imap_limit] - Run scrape→send→process replies once\n"
             "/test_scrape - Simulate scraping test data\n"
             "/generate_message &lt;load_id&gt; - Generate message for a load\n"
             "/send_message &lt;load_id&gt; - Send message to broker\n"
+            "/broker_reply &lt;load_id&gt; &lt;broker_reply_text&gt; - Process broker reply and auto-follow-up\n"
             "/octo_profiles - List available Octo profiles\n"
             "/scrape_dat_open &lt;profile&gt; - Open browser for manual filters\n"
             "/scrape_dat_run - Scrape visible loads (after SEARCH)\n"
@@ -75,9 +79,12 @@ class TelegramBot:
             "/status - Check system status\n"
             "/stats - View statistics (loads, messages, etc.)\n"
             "/loads - List recent loads from database\n"
+            "/possible_loads - List loads that have both rate and commodity\n"
+            "/auto_cycle [max_scrape] [max_emails] [imap_limit] - Run one full automated cycle\n"
             "/test_scrape - Simulate scraping and add test loads\n"
             "/generate_message &lt;load_id&gt; - Generate AI message for a load\n"
             "/send_message &lt;load_id&gt; - Send email to broker for a load\n"
+            "/broker_reply &lt;load_id&gt; &lt;broker_reply_text&gt; - Process broker response and auto-reply\n"
             "/octo_profiles - List available Octo profiles\n"
             "/scrape_dat_open &lt;profile&gt; - Open Octo browser for DAT (fill filters, then SEARCH)\n"
             "/scrape_dat_run - Scrape visible loads from open session\n"
@@ -161,6 +168,7 @@ class TelegramBot:
                         'new': '🆕',
                         'contacted': '📧',
                         'responded': '📬',
+                        'green_light': '🟢',
                         'booked': '✅',
                         'expired': '❌'
                     }.get(load.status, '❓')
@@ -171,11 +179,13 @@ class TelegramBot:
                     destination = str(load.destination or 'N/A').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     status = str(load.status or 'N/A').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     broker_email = str(load.broker_email or 'N/A').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    commodity = str(load.commodity or 'N/A').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     
                     loads_text += (
                         f"{status_emoji} <b>Load {load_id}</b>\n"
                         f"📍 {origin} → {destination}\n"
                         f"💰 ${load.rate or 'N/A'} | {load.miles or 'N/A'} miles\n"
+                        f"📦 Commodity: {commodity}\n"
                         f"📧 Broker Email: {broker_email}\n"
                         f"📊 Status: {status}\n\n"
                     )
@@ -185,6 +195,147 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error in loads command: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def possible_loads_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /possible_loads - show loads with both rate and commodity."""
+        try:
+            self._log_command_start("/possible_loads", update, context)
+
+            with db.get_session() as session:
+                loads = (
+                    session.query(Load)
+                    .filter(Load.rate.isnot(None), Load.commodity.isnot(None))
+                    .order_by(Load.updated_at.desc())
+                    .limit(20)
+                    .all()
+                )
+
+                if not loads:
+                    await update.message.reply_text(
+                        "📭 No possible loads yet. Waiting for broker replies with rate + commodity."
+                    )
+                    self._log_command_success("/possible_loads", update, extra="no-loads")
+                    return
+
+                text = "<b>Possible Loads (rate + commodity known)</b>\n\n"
+                for load in loads:
+                    load_id = str(load.load_id or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    origin = str(load.origin or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    destination = str(load.destination or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    commodity = str(load.commodity or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    broker_email = str(load.broker_email or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    status = str(load.status or "N/A").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+                    text += (
+                        f"🟢 <b>{load_id}</b>\n"
+                        f"📍 {origin} → {destination}\n"
+                        f"💰 ${load.rate}\n"
+                        f"📦 {commodity}\n"
+                        f"📧 {broker_email}\n"
+                        f"📊 {status}\n\n"
+                    )
+
+                await update.message.reply_text(text, parse_mode="HTML")
+                self._log_command_success("/possible_loads", update, extra=f"count={len(loads)}")
+        except Exception as e:
+            logger.error(f"Error in possible_loads command: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def auto_cycle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Run one end-to-end cycle:
+          1) scrape visible DAT loads from open browser session
+          2) send inquiries for up to max_emails new loads
+          3) process IMAP unseen replies once
+        Usage: /auto_cycle [max_scrape] [max_emails] [imap_limit]
+        """
+        self._log_command_start("/auto_cycle", update, context)
+        max_scrape = 20
+        max_emails = 20
+        imap_limit = 10
+        try:
+            if len(context.args) >= 1:
+                max_scrape = max(1, int(context.args[0]))
+            if len(context.args) >= 2:
+                max_emails = max(1, int(context.args[1]))
+            if len(context.args) >= 3:
+                imap_limit = max(1, int(context.args[2]))
+        except Exception:
+            await update.message.reply_text(
+                "❌ Usage: /auto_cycle [max_scrape] [max_emails] [imap_limit]\n"
+                "Example: /auto_cycle 20 10 15"
+            )
+            return
+
+        await update.message.reply_text(
+            "🔄 Running auto cycle...\n"
+            f"- scrape max: {max_scrape}\n"
+            f"- send max: {max_emails}\n"
+            f"- IMAP limit: {imap_limit}"
+        )
+
+        try:
+            from src.scraper.dat_playwright_scraper import scrape_and_store_from_open
+            from src.communication.email_service import EmailService
+            from src.ai.message_generator import MessageGenerator
+
+            # 1) Scrape from currently open DAT session
+            scraped_new = await scrape_and_store_from_open(max_loads=max_scrape)
+
+            # 2) Send inquiries for newly available loads
+            email_service = EmailService()
+            generator = MessageGenerator()
+
+            sent_count = 0
+            send_fail_count = 0
+            candidate_load_ids: list[str] = []
+            with db.get_session() as session:
+                candidates = (
+                    session.query(Load)
+                    .filter(Load.status == "new", Load.broker_email.isnot(None))
+                    .order_by(Load.created_at.desc())
+                    .limit(max_emails)
+                    .all()
+                )
+                candidate_load_ids = [str(l.load_id) for l in candidates]
+
+            for lid in candidate_load_ids:
+                result = await email_service.send_load_inquiry(lid, generator)
+                if result.get("success"):
+                    sent_count += 1
+                else:
+                    send_fail_count += 1
+
+            # 3) Process inbound IMAP replies once
+            await email_service.poll_imap_unseen_and_auto_reply(limit=imap_limit)
+
+            # Optional: snapshot ready/possible count for quick visibility
+            with db.get_session() as session:
+                possible_count = (
+                    session.query(Load)
+                    .filter(Load.rate.isnot(None), Load.commodity.isnot(None))
+                    .count()
+                )
+
+            await update.message.reply_text(
+                "✅ Auto cycle complete.\n"
+                f"Scraped new loads: {scraped_new}\n"
+                f"Inquiries sent: {sent_count}\n"
+                f"Send failures: {send_fail_count}\n"
+                f"Possible loads now: {possible_count}\n\n"
+                "Use /possible_loads to review."
+            )
+            self._log_command_success(
+                "/auto_cycle",
+                update,
+                extra=(
+                    f"scraped_new={scraped_new}, sent={sent_count}, "
+                    f"send_fail={send_fail_count}, possible={possible_count}"
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Error in auto_cycle command: {e}")
+            await update.message.reply_text(f"❌ Auto cycle failed: {str(e)}")
     
     async def test_scrape_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /test_scrape command - simulate scraping"""
@@ -222,13 +373,33 @@ class TelegramBot:
         mapping = {profile.title: profile.uuid for profile in profiles.values()}
         logger.info(f"Octo profiles mapping (title -> uuid): {mapping}")
 
-        lines = ["<b>Available Octo profiles</b>:"]
-        for key, profile in profiles.items():
-            tags = ", ".join(profile.tags) if profile.tags else "-"
-            # Show UUID so you can see the mapping explicitly
-            lines.append(f"• <b>{profile.title}</b>\n  uuid: <code>{profile.uuid}</code>\n  tags: {tags}")
+        # Send as chunks to avoid Telegram request timeouts on larger payloads.
+        # Preserve the iteration order from `profiles.values()` to keep the same order as Octo API.
+        profiles_in_order = list(profiles.values())
 
-        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        try:
+            await update.message.reply_text("<b>Available Octo profiles</b>:", parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"/octo_profiles failed sending header: {e!r}")
+            return
+
+        for profile in profiles_in_order:
+            try:
+                tags = ", ".join(profile.tags) if profile.tags else "-"
+                # Keep message compact; tags can be long.
+                if len(tags) > 120:
+                    tags = tags[:117] + "..."
+
+                msg = (
+                    f"• <b>{profile.title}</b>\n"
+                    f"  uuid: <code>{profile.uuid}</code>\n"
+                    f"  tags: {tags}"
+                )
+                await update.message.reply_text(msg, parse_mode="HTML")
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.error(f"/octo_profiles failed sending profile chunk: {e!r}")
+                continue
         self._log_command_success("/octo_profiles", update, extra=f"count={len(profiles)}")
 
     async def scrape_dat_open_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,6 +578,87 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error sending message: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def broker_reply_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /broker_reply <load_id> <broker_reply_text> and auto-send follow-up."""
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Usage:\n"
+                "/broker_reply <load_id> <broker_reply_text>\n\n"
+                "Example:\n"
+                "/broker_reply 832 \"We can do $1600 for frozen chicken\""
+            )
+            return
+
+        self._log_command_start("/broker_reply", update, context)
+
+        load_id = context.args[0]
+        broker_reply_text = " ".join(context.args[1:]).strip()
+        if not broker_reply_text:
+            await update.message.reply_text("❌ Broker reply text is empty.")
+            return
+
+        await update.message.reply_text("🤖 Processing broker reply and sending follow-up...")
+
+        try:
+            from src.communication.email_service import EmailService
+
+            email_service = EmailService()
+            result = await email_service.reply_to_broker(load_id, broker_reply_text)
+
+            if not result.get("success"):
+                await update.message.reply_text(f"❌ Failed: {result.get('error')}")
+                return
+
+            extracted = result.get("extracted") or {}
+            rate = extracted.get("rate")
+            commodity = extracted.get("commodity")
+            missing_fields = result.get("missing_fields") or []
+            is_ready = bool(result.get("is_ready"))
+            is_green_light = bool(result.get("is_green_light"))
+            filter_reasons = result.get("filter_reasons") or []
+            telegram_sent = bool(result.get("telegram_sent"))
+            origin = result.get("origin")
+            destination = result.get("destination")
+
+            if is_ready:
+                rate_str = "unknown" if rate is None else f"${rate}"
+                await update.message.reply_text(
+                    "✅ Load is ready (rate + commodity known).\n"
+                    f"Load: {load_id}\n"
+                    f"Route: {origin} → {destination}\n"
+                    f"Rate: {rate_str}\n"
+                    f"Commodity: {commodity}"
+                )
+            else:
+                await update.message.reply_text(
+                    "✅ Extracted from broker reply, follow-up sent.\n"
+                    f"Load: {load_id}\n"
+                    f"Route: {origin} → {destination}\n"
+                    f"Rate: {'unknown' if rate is None else f'${rate}'}\n"
+                    f"Commodity: {commodity if commodity else 'unknown'}\n"
+                    f"Missing: {', '.join(missing_fields) if missing_fields else 'unknown'}"
+                )
+
+            if is_green_light:
+                await update.message.reply_text(
+                    "🟢 Green-light match passed filters.\n"
+                    f"Telegram notified: {'yes' if telegram_sent else 'no'}"
+                )
+            elif is_ready and filter_reasons:
+                await update.message.reply_text(
+                    "🟡 Ready but not green-light (filter mismatch).\n"
+                    f"Reasons: {', '.join(filter_reasons)}"
+                )
+
+            self._log_command_success(
+                "/broker_reply",
+                update,
+                extra=f"is_ready={is_ready}, missing={missing_fields}",
+            )
+        except Exception as e:
+            logger.error(f"Error in broker_reply: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle regular text messages"""
@@ -418,7 +670,10 @@ class TelegramBot:
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors"""
-        logger.error(f"Update {update} caused error {context.error}")
+        err = getattr(context, "error", None)
+        logger.error(
+            f"Update {update} caused error {err!r} (type={type(err).__name__ if err else None})"
+        )
         
         try:
             if update and update.message:
@@ -435,6 +690,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("loads", self.loads_command))
+        self.application.add_handler(CommandHandler("possible_loads", self.possible_loads_command))
+        self.application.add_handler(CommandHandler("auto_cycle", self.auto_cycle_command))
         self.application.add_handler(CommandHandler("test_scrape", self.test_scrape_command))
         self.application.add_handler(CommandHandler("octo_profiles", self.octo_profiles_command))
         self.application.add_handler(CommandHandler("scrape_dat_open", self.scrape_dat_open_command))
@@ -443,6 +700,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("scrape_dat_debug", self.scrape_dat_debug_command))
         self.application.add_handler(CommandHandler("generate_message", self.generate_message_command))
         self.application.add_handler(CommandHandler("send_message", self.send_message_command))
+        self.application.add_handler(CommandHandler("broker_reply", self.broker_reply_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Add error handler
@@ -464,6 +722,19 @@ class TelegramBot:
             await self.application.updater.start_polling()
             self.is_running = True
             logger.info("Telegram bot started successfully!")
+
+            # Optional: IMAP auto-reply loop (infinite background task)
+            try:
+                from src.communication.email_service import EmailService
+
+                email_service = EmailService()
+                if getattr(email_service, "enable_imap_auto_reply", False):
+                    asyncio.create_task(email_service.imap_auto_reply_loop())
+                    logger.info("IMAP auto-reply loop started.")
+                else:
+                    logger.info("IMAP auto-reply loop disabled (ENABLE_IMAP_AUTO_REPLY=false).")
+            except Exception as e:
+                logger.error(f"Failed to start IMAP auto-reply loop: {e!r}")
         except Exception as e:
             logger.error(f"Failed to start Telegram bot: {e}")
             raise
